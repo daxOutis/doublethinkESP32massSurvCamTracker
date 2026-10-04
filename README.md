@@ -1,18 +1,26 @@
 # Doublethink
 
 An offline, standalone GPS alerter for pre-defined locations — built around
-automated license plate reader (ALPR) / Flock Safety camera locations, but
+automated license plate reader (ALPR) / Flock Safety/Axon camera locations, but
 the zone list is just coordinates, so it works for anything you want to be
 notified about on approach. No cloud service, no account, no internet
 connection required once it's flashed and loaded.
 
 It runs entirely on an ESP32: reads GPS continuously, checks your position
 against a locally-stored list of coordinates, and sounds an alert when
-you're within a configurable radius of one. A second output — a relay-driven
+you're within a configurable radius of one. A second optional output — a relay-driven
 actuator — fires once on entry and once on exit, wired up as a physical
 "do something" trigger. What that something is is up to you: a visual
 indicator, a gesture, or whatever else you want to build. The firmware just
-gives you a clean, debounced, non-blocking trigger signal to work with.
+gives you a signal to work with.
+
+The GPS coordinates used come from OpenStreetMaps.org. They can be retrieved in
+a ready to use JSON format at  https://noneya.page  were you can select just the city
+or bounding box region you need coordinates from.  
+The JSON is then uploaded to the esp32 so it knows when to notify you. 
+The GPS module checks your current GPS coordinates constantly but never sends the
+data anywhere,  it just checks it against the JSON file uploaded to look for matches. 
+No GPS subscription is needed. Total cost for the project material was around $30. 
 
 ## Disclaimer
 
@@ -24,6 +32,8 @@ actuator output is your own responsibility. Separately, alerting on the
 location of camera/law-enforcement equipment may itself be restricted in
 your jurisdiction (comparable laws exist in some places for radar/laser
 detectors) — check your local laws before using this in a vehicle.
+
+This project's firmware was written with the assistance of Claude Code (Anthropic's AI coding tool). All hardware design, wiring, and testing were done on real hardware by hand. Review the code yourself before relying on it — AI-assisted code can still contain mistakes.
 
 ## Hardware
 
