@@ -67,6 +67,10 @@ const unsigned long ACTUATOR_PULSE_MS = 100;  // length of each throw
 // Edge detection + non-blocking pulse timing, same millis() approach
 // as the buzzer so loop() never stalls and GPS bytes keep flowing.
 bool actuatorExtended = false;         // last direction we threw it
+// Zone state the automatic trigger last acted on. Kept separate from
+// actuatorExtended so a manual joystick throw doesn't look like a zone
+// mismatch and get immediately undone.
+bool actuatorZoneState = false;
 bool actuatorPulsing = false;          // a relay is energized right now
 unsigned long actuatorPulseStart = 0;  // when the current pulse began
 int actuatorActivePin = -1;            // which relay pin is energized
@@ -75,8 +79,7 @@ int actuatorActivePin = -1;            // which relay pin is energized
 //                   JOYSTICK (manual actuator override)
 // ==================================================================
 // A 5-pin analog joystick module (GND, VCC, VRX, VRY, SW) for throwing the
-// actuator by hand — bench-verified in bench/actuator_test before being
-// carried over here. Only VRX is read; VRY and SW don't need to be wired.
+// actuator by hand.
 // VCC MUST go to 3.3V, not 5V: the ESP32's ADC tops out at 3.3V.
 //
 // GPIO34 is an ADC1 pin, not ADC2 — ADC2 shares hardware with the WiFi
@@ -102,9 +105,7 @@ int readJoystickX() {
 // GPIO33 is a normal pin, unlike 34-39, which can't do INPUT_PULLUP at
 // all. A press toggles actuatorEnabled — a manual kill switch for the
 // motor only: the buzzer and zone detection keep running either way, so
-// you still get the audible alert with the motor disabled. Debounced in
-// software since a mechanical switch can bounce through several
-// transitions on one press.
+// you still get the audible alert with the motor disabled. 
 #define JOYSTICK_SW_PIN 33
 const unsigned long SW_DEBOUNCE_MS = 50;
 bool actuatorEnabled = true;
@@ -133,7 +134,7 @@ struct DangerZone {
 };
 
 // Fixed-capacity array + a count, instead of a compile-time-sized array,
-// so the zone list can be replaced at runtime without
+// so the zone list can be replaced at runtime (chunk 4c/4d) without
 // recompiling. At 16 bytes/zone this array is 8 KB of RAM; the real
 // ceiling is heap headroom while parsing an upload, which comfortably
 // covers this many coordinate-only entries.
@@ -156,9 +157,7 @@ void addDangerZone(double lat, double lon) {
 // boot, or a corrupt/empty file). These are placeholders — EDIT them to
 // somewhere near you (or just upload a zones.json) so you can walk/drive
 // into one and see the alert fire. The example below sits on the actual
-// geographic center of the contiguous US, near Lebanon, Kansas — picked
-// specifically because it's nowhere real, not a hint about anyone's
-// actual location.
+// geographic center of the contiguous US
 void loadDefaultZones() {
   addDangerZone(39.8283, -98.5795);   // example only — center of the US
   addDangerZone(39.8301, -98.5770);   // example only
@@ -237,7 +236,7 @@ File uploadFile;
 bool uploadHadError = false;
 
 // ==================================================================
-//                   PERSISTENCE
+//                   PERSISTENCE (chunk 4d)
 // ==================================================================
 // Both things you can change in the field are kept on LittleFS (flash, not
 // RAM) so they survive unplugging the device: the uploaded zone list in
@@ -305,6 +304,7 @@ void loadZones() {
 // Read the alert radius saved from a previous /settings change. Missing or
 // bad file just means "keep the compiled-in default."
 void loadConfig() {
+  if (!LittleFS.exists(CONFIG_FILE)) return;
   File f = LittleFS.open(CONFIG_FILE, "r");
   if (!f) return;
   JsonDocument doc;
@@ -359,7 +359,7 @@ void handleRoot() {
 
 // POST /settings — currently just the alert radius. Clamped to a sane range
 // so a fat-fingered value can't disable alerts (0) or make everywhere a
-// zone. Saved to config.json so it survives a power cycle.
+// zone. Saved to config.json so it survives a power cycle (chunk 4d).
 void handleSettings() {
   if (server.hasArg("radius")) {
     long r = server.arg("radius").toInt();
@@ -475,6 +475,13 @@ void setup() {
   joystickCenterX = readJoystickX();
   Serial.print("Joystick calibrated — leave it centered at boot. Center = ");
   Serial.println(joystickCenterX);
+  // A real centered stick at 3.3V reads roughly mid-scale. Way off means
+  // it's unpowered/unwired or was held over at boot; a center near 0 or
+  // 4095 would only allow pushes in one direction, so fall back to mid.
+  if (joystickCenterX < 1000 || joystickCenterX > 3000) {
+    Serial.println("Joystick: center reading implausible — check VCC/VRX wiring. Using 2048.");
+    joystickCenterX = 2048;
+  }
 
   pinMode(JOYSTICK_SW_PIN, INPUT_PULLUP);
 
@@ -567,14 +574,15 @@ void loop() {
 
   // Actuator relay: fire one timed pulse when the danger-zone state
   // flips, then leave both relays off. Edge-triggered (inDangerZone vs
-  // actuatorExtended) so it throws once per entry/exit, not repeatedly
-  // while you sit inside a zone. A flip that happens mid-pulse is
-  // caught on the next pass once the pulse finishes. Gated on
-  // actuatorEnabled so the kill switch above can block new throws
-  // without touching the zone/buzzer logic.
-  if (actuatorEnabled && !actuatorPulsing && inDangerZone != actuatorExtended) {
+  // actuatorZoneState) so it throws once per entry/exit, not repeatedly
+  // while you sit inside a zone, and never fights a manual throw. A flip
+  // that happens mid-pulse is caught on the next pass once the pulse
+  // finishes. Gated on actuatorEnabled so the kill switch above can block
+  // new throws without touching the zone/buzzer logic.
+  if (actuatorEnabled && !actuatorPulsing && inDangerZone != actuatorZoneState) {
     startActuatorPulse(inDangerZone);
     actuatorExtended = inDangerZone;
+    actuatorZoneState = inDangerZone;
   }
   // Always let an already-started pulse finish and release, even if the
   // kill switch was pressed mid-throw — cutting power to a moving motor
@@ -590,8 +598,8 @@ void loop() {
   // testing without waiting for a real zone crossing. Gated on
   // actuatorPulsing exactly like the automatic trigger above so the two
   // never stack, and on actuatorEnabled so the kill switch also blocks
-  // manual throws; a manual throw also updates actuatorExtended so the
-  // zone logic doesn't fight it on the next GPS update.
+  // manual throws. A manual throw leaves actuatorZoneState alone, so it
+  // sticks until the next real zone entry/exit.
   int joystickOffsetX = readJoystickX() - joystickCenterX;
   if (abs(joystickOffsetX) < JOYSTICK_DEADZONE_COUNTS) {
     joystickArmed = true;
@@ -600,6 +608,7 @@ void loop() {
     startActuatorPulse(extend);
     actuatorExtended = extend;
     joystickArmed = false;
+    Serial.println(extend ? "Joystick: EXTEND pulse" : "Joystick: RETRACT pulse");
   }
 
   // If we've gone a while with zero recognized characters at all,
@@ -607,5 +616,29 @@ void loop() {
   if (millis() > 8000 && gps.charsProcessed() < 10) {
     Serial.println("No GPS data received — check wiring (RX/TX swapped?) and baud rate.");
     delay(3000);
+  }
+
+  // Periodic heartbeat so "no Lat: lines on Serial" can be told apart from
+  // "nothing is happening at all" — e.g. a GPS fix with 0 satellites still
+  // looks identical to a dead UART link without this. Kept in permanently
+  // (not just for initial setup) since it's the fastest way for anyone
+  // troubleshooting wiring to see what's actually happening under the hood.
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat >= 5000) {
+    lastHeartbeat = millis();
+    Serial.print("[heartbeat] charsProcessed=");
+    Serial.print(gps.charsProcessed());
+    Serial.print(" sentencesWithFix=");
+    Serial.print(gps.sentencesWithFix());
+    Serial.print(" failedChecksum=");
+    Serial.print(gps.failedChecksum());
+    Serial.print(" satellites=");
+    Serial.print(gps.satellites.value());
+    Serial.print(" joyX=");
+    Serial.print(readJoystickX());
+    Serial.print(" joyCenter=");
+    Serial.print(joystickCenterX);
+    Serial.print(" actuatorEnabled=");
+    Serial.println(actuatorEnabled ? "yes" : "no");
   }
 }
