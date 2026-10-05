@@ -47,6 +47,27 @@ This project's firmware was written with the assistance of Claude Code (Anthropi
 - Optional: a 2-axis analog joystick module (GND, VCC, VRX, VRY, SW) for
   manual control of the actuator output
 
+### Bill of materials
+
+Rough per-item prices from common listings — these move around and some
+parts come in multi-packs, so treat this as a ballpark, not a quote:
+
+| Component | Approx. price | Needed for |
+|---|---|---|
+| ESP32-WROOM-32 DevKit board | ~$9 | Core |
+| GY-NEO6MV2 (NEO-6M) GPS module | ~$6 | Core |
+| Passive piezo buzzer | ~$1 | Buzzer alert (optional) |
+| L298N motor driver module (2-pack, ~$7) | ~$3.50/unit | Actuator output (optional) |
+| Car door-lock actuator (2-pack, ~$14) | ~$7/unit | Actuator output (optional) |
+| 2-axis analog joystick module (2-pack, ~$6) | ~$3/unit | Manual override (optional) |
+
+Core build (ESP32 + GPS + buzzer) lands around $15-20; adding the full
+actuator/joystick setup brings total material cost to roughly $30.
+
+### Wiring
+
+![Wiring diagram: ESP32 connected to GPS module, buzzer, joystick, and an L298N driver powering the actuator from a separate fused 12V supply](wiringDiag.png)
+
 ### Pin map (ESP32 DoIt DevKit V1)
 
 | Function | Pin |
